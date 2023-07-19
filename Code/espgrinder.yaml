@@ -1,0 +1,387 @@
+esphome:
+  name: espgrinder
+  on_boot:
+    priority: 600
+    then:
+      - lambda: |-
+          id(motor).make_call().set_brightness(id(default_speed)).perform();
+      - delay: 2s
+      - lambda: |-
+          id(tare_button).press();
+          id(starting_up) = 0;
+          if(id(working_mode) == 2){
+            id(motor).turn_on().perform();
+          }
+
+esp8266:
+  board: d1_mini
+  restore_from_flash: true
+
+# Enable logging
+logger:
+  level: INFO
+
+wifi:
+  ssid: "xxxxxxxxxxx"
+  password: "xxxxxxxxxxxx"
+  #manual_ip:
+    #static_ip: 192.168.1.122
+    #gateway: 192.168.1.1
+    #subnet: 255.255.255.0
+
+ota:
+  password: ""
+api:
+ 
+#web_server:
+#  port: 80
+
+preferences:
+  flash_write_interval: 5sec
+
+globals:
+  - id: display_page
+    type: int
+    restore_value: no
+    initial_value: '1'
+    
+  - id: working_mode
+    type: int
+    restore_value: yes
+    initial_value: '1'
+    
+  - id: starting_up
+    type: int
+    restore_value: no
+    initial_value: '1'
+    
+  - id: default_speed
+    type: float
+    restore_value: yes
+    initial_value: '1'
+    
+  - id: tare
+    type: float
+    restore_value: no
+    initial_value: '0'
+    
+  - id: stopwatch_begin
+    type: long
+    restore_value: no
+    initial_value: '0'
+    
+  - id: last_stopwatch
+    type: long
+    restore_value: no
+    initial_value: '0'
+
+# Buttons
+ 
+button:
+  ## Button used to initiate a manual tare
+  - platform: template
+    id: tare_button
+    name: "Smart Scale Manual Tare Action"
+    icon: mdi:scale-balance
+    on_press:
+      - lambda: |-
+          id(tare) = id(scale).state;
+
+binary_sensor:
+  - platform: gpio
+    pin:
+      number: D5
+      mode: INPUT_PULLUP
+      inverted: True
+    name: "WB1"
+    on_click:
+      - min_length: 50ms
+        max_length: 350ms
+        then:
+          - button.press: tare_button
+      - min_length: 500ms
+        max_length: 3000ms
+        then:
+          lambda: |-
+            if(id(display_page) < 4) {
+              id(display_page) += 1;
+            } else {
+              id(display_page) = 1;
+            }
+        
+  - platform: gpio
+    pin:
+      number: D0
+      inverted: True
+    name: "WB1"
+    filters:
+       - delayed_on: 10ms
+    on_click:
+      min_length: 50ms
+      then:
+        - light.toggle: motor
+ 
+sensor:
+# ------------ Scale --------------
+    
+  - platform: hx711
+    id: scale_raw
+    name: "Scale Raw"
+    internal: False
+    dout_pin: D4
+    clk_pin: D3
+    gain: 128
+    update_interval: 0.1s
+    filters:
+      - quantile:
+          window_size: 5
+          send_every: 1
+          send_first_at: 1
+          quantile: .9
+    on_value:
+      then:
+        - sensor.template.publish:
+            id: scale
+            state: !lambda 'return id(scale_raw).state;'
+                        
+  # Mapped value to Grams
+  - platform: template
+    id: scale
+    name: "scale"
+    internal: False
+    filters:
+      - lambda: 'return x;'
+      - calibrate_linear:
+          # retrieve these values by evaluating the raw values with loads of known mass.
+          # note that a bigger difference between measurements usually results in higher resolution,
+          # so measure 0 Kg and the highest known mass you have (like f.ex. your own weight, measured by a normal scale with good accuracy)
+          - -2943 -> 0
+          - -832880 -> 428.9
+      - lambda: |-
+          if (x <= 0.3 && x >= -0.3) {
+            return 0.0;
+          } else {
+            return x;
+          }
+    unit_of_measurement: 'g'
+    accuracy_decimals: 1
+    # the sensor will automatically update through the 'sensor.template.publish' call
+    update_interval: never
+                        
+# ------------ Encoder --------------
+  - platform: rotary_encoder
+    internal: True
+    id: encoder
+    name: "Rotary Encoder"
+    pin_a: D7
+    pin_b: D6
+    on_clockwise:
+      lambda: |-
+        switch(id(display_page)){
+          case 1:
+            if (id(motor).current_values.get_brightness() < 1) {
+              id(motor).make_call().set_transition_length(0).set_brightness(id(motor).current_values.get_brightness() + 0.02).perform();
+            }
+            break;
+          case 2:
+            if (id(default_speed) < 1) {
+              id(default_speed) += 0.02;
+            }
+            break;
+          case 3:
+            if (id(working_mode) < 2) {
+              id(working_mode) += 1;
+            }else{
+              id(working_mode) = 1;
+            }
+            break;
+        };
+    on_anticlockwise:
+      lambda: |-
+        switch(id(display_page)){
+          case 1:
+            if (id(motor).current_values.get_brightness() > 0.3) {
+              id(motor).make_call().set_transition_length(0).set_brightness(id(motor).current_values.get_brightness() - 0.02).perform();
+            }
+            break;
+          case 2:
+            if (id(default_speed) > 0.31) {
+              id(default_speed) -= 0.02;
+            }
+            break;
+          case 3:
+            if (id(working_mode) > 1) {
+              id(working_mode) -= 1;
+            }else{
+              id(working_mode) = 2;  
+            }
+            break;
+        };
+        
+text_sensor:
+  - platform: template
+    name: Stop Watch
+    id: stopwatch
+    lambda: |-
+      long ms = id(last_stopwatch);
+      if(id(motor).current_values.get_state() == 1){
+        ms = (millis() - id(stopwatch_begin));
+      }
+      long timer_ms = (ms/100)%10;
+      long timer_sec = (ms/1000)%60;
+      long timer_min = (ms/60000)%60;
+      String formatted_timer = "";
+      if(timer_min < 10){
+        formatted_timer = "0" + String(timer_min);
+      }else{
+        formatted_timer = String(timer_min);
+      }
+      if(timer_sec < 10){
+        formatted_timer += ":0" + String(timer_sec);
+      }else{
+        formatted_timer += ":" + String(timer_sec);
+      }
+      if(timer_ms < 10){
+        formatted_timer += ":0" + String(timer_ms);
+      }else{
+        formatted_timer += ":" + String(timer_ms);
+      }   
+      return { (formatted_timer).c_str() };
+    update_interval: .1s
+                
+# ------------ Motor --------------
+output:
+  - platform: esp8266_pwm
+    pin: D8
+    frequency: 50 Hz
+    id: pwm_output
+    
+light:
+  - platform: monochromatic
+    name: "Motor"
+    id: motor
+    output: pwm_output
+    restore_mode: ALWAYS_OFF
+    default_transition_length : 0s
+    gamma_correct: 0
+    on_turn_on:
+      lambda: |-
+        id(stopwatch_begin) = millis();
+    on_turn_off:
+      lambda: |-
+        id(last_stopwatch) = millis() - id(stopwatch_begin);
+
+i2c:
+  sda: D1
+  scl: D2
+  frequency: 800kHz
+
+font:
+  - file: "calibri-regular.ttf"
+    id: Title_Font
+    size: 16
+  - file: "calibri-regular.ttf"
+    id: font_28
+    size: 28
+  - file: "calibri-regular.ttf"
+    id: font_24
+    size: 24
+  - file: "calibri-regular.ttf"
+    id: Grind_Status_Font
+    size: 20
+  - file: "calibri-regular.ttf"
+    id: font_14
+    size: 14
+  - file: materialdesignicons-webfont.ttf
+    id: icon_font
+    size: 30
+    glyphs:
+      - "\U000F015D" #close-octagon-outline
+      - "\U000F08FF" #play-speed
+      - "\U000F0027" #alert-box
+  - file: materialdesignicons-webfont.ttf
+    id: icon_font_small
+    size: 14
+    glyphs:
+      - "\U000F04C5" #speedometer
+      - "\U000F1377" #refresh-circle
+      - "\U000F05D1" #scale-balance
+      - "\U000F0493" #cog
+      - "\U000F144E" #clock-time-four-outline
+  - file: materialdesignicons-webfont.ttf
+    id: icon_font_large
+    size: 50
+    glyphs:
+      - "\U000F109F" #coffee-maker
+      
+      
+  
+
+display:
+  - platform: ssd1306_i2c
+    model: "SSD1306 128x64"
+    reset_pin: D0
+    address: 0x3C
+    update_interval: .1s
+    lambda: |-
+      if(id(starting_up) == 1){
+        it.print(64, 40, id(icon_font_large), TextAlign::CENTER, "\U000F109F");
+      }else{
+          switch(id(display_page)){
+            case 1:
+              it.rectangle(0, 0, 48, 64);
+              it.rectangle(48, 0, 80, 64);
+              it.print(9, 10, id(icon_font_small), TextAlign::CENTER, "\U000F04C5");
+              it.printf(31, 10, id(font_14), TextAlign::CENTER , "%.0f%%", id(motor).current_values.get_brightness() * 100);       
+              it.line(0, 16, 128, 16);
+              it.print(64, 10, id(icon_font_small), TextAlign::CENTER, "\U000F05D1");
+              it.print(94, 10, id(Title_Font), TextAlign::CENTER, "Scale");
+              if(id(motor).current_values.get_state() == 1){
+                it.print(24, 55, id(Grind_Status_Font), TextAlign::CENTER , "ON");       
+                it.print(25, 32, id(icon_font), TextAlign::CENTER, "\U000F08FF");
+              }else{
+                it.print(24, 55, id(Grind_Status_Font), TextAlign::CENTER , "OFF");       
+                it.print(25, 32, id(icon_font), TextAlign::CENTER, "\U000F015D");
+              }
+              if(id(scale).state<1000){
+                it.printf(90, 34, id(font_24), TextAlign::CENTER, "%.1f", id(scale).state - id(tare));
+              }else{
+                it.print(64, 34, id(icon_font), TextAlign::CENTER, "\U000F0027");
+                it.print(104, 34, id(Title_Font), TextAlign::CENTER , "OVER");       
+              }
+              it.line(48, 46 , 128, 46);
+              it.print(60, 56, id(icon_font_small), TextAlign::CENTER, "\U000F144E");
+              it.printf(94, 56, id(font_14), TextAlign::CENTER, "%s", id(stopwatch).state.c_str());
+              break;
+            case 2:
+              it.rectangle(0, 0, 128, 64);
+              it.line(0, 16, 128, 16);
+              it.print(64, 10, id(Title_Font), TextAlign::CENTER, "Default Speed");
+              it.printf(64, 40, id(font_28), TextAlign::CENTER, "%.0f%%", id(default_speed)  * 100);
+              break;
+            case 3:
+              it.rectangle(0, 0, 128, 64);
+              it.line(0, 16, 128, 16);
+              it.print(64, 10, id(Title_Font), TextAlign::CENTER, "Working Mode");
+              switch(id(working_mode)){
+                case 1:
+                  it.printf(64, 40, id(Title_Font), TextAlign::CENTER, "Manual");
+                break;
+                case 2:
+                  it.printf(64, 40, id(Title_Font), TextAlign::CENTER, "Grind on Startup");
+                break;
+              }
+              break;
+            case 4:
+              it.rectangle(0, 0, 128, 64);
+              it.line(0, 16, 128, 16);
+              it.print(64, 10, id(Title_Font), TextAlign::CENTER, "Scale Raw");
+              it.printf(64, 30, id(Title_Font), TextAlign::CENTER, "%.1f", id(scale_raw).state);
+              it.printf(64, 45, id(Title_Font), TextAlign::CENTER, "%.1f", id(scale).state);
+              break;
+          }
+      }
+      
+      
+      
+
