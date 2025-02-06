@@ -22,19 +22,19 @@ logger:
   level: INFO
 
 wifi:
-  ssid: "xxxxxxxxxxx"
-  password: "xxxxxxxxxxxx"
+  ssid: "Ornitorrinco"
+  password: "148casa45"
   #manual_ip:
     #static_ip: 192.168.1.122
     #gateway: 192.168.1.1
     #subnet: 255.255.255.0
 
 ota:
-  password: ""
+  - platform: esphome
 api:
  
-#web_server:
-#  port: 80
+web_server:
+  port: 80
 
 preferences:
   flash_write_interval: 5sec
@@ -112,8 +112,8 @@ binary_sensor:
   - platform: gpio
     pin:
       number: D0
-      inverted: True
-    name: "WB1"
+      inverted: true
+    name: "WB2"
     filters:
        - delayed_on: 10ms
     on_click:
@@ -158,7 +158,7 @@ sensor:
           - -2943 -> 0
           - -832880 -> 428.9
       - lambda: |-
-          if (x <= 0.3 && x >= -0.3) {
+          if (x <= 2 && x >= -2 ) {
             return 0.0;
           } else {
             return x;
@@ -253,13 +253,15 @@ text_sensor:
 output:
   - platform: esp8266_pwm
     pin: D8
-    frequency: 50 Hz
+    frequency: 100 Hz
     id: pwm_output
+    
     
 light:
   - platform: monochromatic
     name: "Motor"
     id: motor
+    entity_category: ''
     output: pwm_output
     restore_mode: ALWAYS_OFF
     default_transition_length : 0s
@@ -272,8 +274,10 @@ light:
         id(last_stopwatch) = millis() - id(stopwatch_begin);
 
 i2c:
-  sda: D1
-  scl: D2
+  sda: D2
+  scl: D1
+  scan: true
+  id: bus_a
   frequency: 800kHz
 
 font:
@@ -320,7 +324,6 @@ font:
 display:
   - platform: ssd1306_i2c
     model: "SSD1306 128x64"
-    reset_pin: D0
     address: 0x3C
     update_interval: .1s
     lambda: |-
